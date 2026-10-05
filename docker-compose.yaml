@@ -1,0 +1,126 @@
+# ROS 2 DDS 学習用 検証環境(Phase 1)
+# 使い方は README.md を参照。シナリオごとに profile を指定して起動する。
+
+x-ros-common: &ros-common
+  build: .
+  image: dds-lab:jazzy
+  networks: [dds-net]
+  init: true
+  tty: true
+  volumes:
+    - ./scripts:/scripts:ro
+    - ./src:/src:ro          # 演習パッケージ(ビルドはコンテナ内の /tmp で行う)
+    - ./results:/results
+
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: "0"
+  RCUTILS_COLORIZED_OUTPUT: "0"
+  PYTHONUNBUFFERED: "1"
+  # コンテナ間では /dev/shm が共有されないため、Fast DDS の共有メモリを無効化して UDP だけにする
+  FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+
+services:
+  # ---------- basic / domain:rmw切り替えとドメイン分離 ----------
+  talker-fastrtps:
+    <<: *ros-common
+    profiles: [basic, domain]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    command: ros2 run demo_nodes_cpp talker
+
+  listener-fastrtps:
+    <<: *ros-common
+    profiles: [basic, domain]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    command: ros2 run demo_nodes_cpp listener
+
+  # 別ベンダー同士の通信確認(Cyclone DDS の listener が Fast DDS の talker を受信できるか)
+  listener-cyclone:
+    <<: *ros-common
+    profiles: [basic]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    command: ros2 run demo_nodes_cpp listener
+
+  # ドメインIDが違う listener(何も受信しないことを確認する)
+  listener-domain1:
+    <<: *ros-common
+    profiles: [domain]
+    environment:
+      <<: *ros-env
+      ROS_DOMAIN_ID: "1"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    command: ros2 run demo_nodes_cpp listener
+
+  # ---------- qos:QoS不一致の再現 ----------
+  # 既定は Pub=best_effort / Sub=reliable(不一致)。PUB_RELIABILITY=reliable で互換になる
+  qos-pub:
+    <<: *ros-common
+    profiles: [qos]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: ${RMW:-rmw_fastrtps_cpp}
+    command: >
+      python3 /scripts/qos_node.py pub
+      --reliability ${PUB_RELIABILITY:-best_effort}
+      --durability ${PUB_DURABILITY:-volatile}
+
+  qos-sub:
+    <<: *ros-common
+    profiles: [qos]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: ${RMW:-rmw_fastrtps_cpp}
+    command: >
+      python3 /scripts/qos_node.py sub
+      --reliability ${SUB_RELIABILITY:-reliable}
+      --durability ${SUB_DURABILITY:-volatile}
+
+  # ---------- transient:TransientLocal の確認 ----------
+  # latched-pub は起動直後に5件送って待機し、late-sub は5秒遅れて参加する
+  latched-pub:
+    <<: *ros-common
+    profiles: [transient]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: ${RMW:-rmw_fastrtps_cpp}
+    command: >
+      python3 /scripts/qos_node.py pub --topic latched
+      --reliability reliable --durability transient_local
+      --depth ${PUB_DEPTH:-10} --count 5
+
+  late-sub:
+    <<: *ros-common
+    profiles: [transient]
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: ${RMW:-rmw_fastrtps_cpp}
+    command: >
+      python3 /scripts/qos_node.py sub --topic latched
+      --reliability reliable --durability ${SUB_DURABILITY:-transient_local}
+      --delay 5
+
+  # ---------- tools:対話シェルと層の確認 ----------
+  shell:
+    <<: *ros-common
+    profiles: [tools]
+    cap_add: [NET_ADMIN, NET_RAW]   # tcpdump / tc を使う後続の演習用
+    environment:
+      <<: *ros-env
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    command: bash
+
+  layers:
+    <<: *ros-common
+    profiles: [tools]
+    environment:
+      <<: *ros-env
+    command: bash /scripts/check_layers.sh
+
+networks:
+  dds-net:
+    driver: bridge

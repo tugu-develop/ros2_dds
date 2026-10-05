@@ -1,0 +1,3 @@
+rmw,samples,lost,mean_ms,max_ms,min_ms,p50_ms,p99_ms
+rmw_fastrtps_cpp,288,0,0.8086,1.2223,0.1814,0.8055,1.026
+rmw_cyclonedds_cpp,289,0,0.5481,1.1224,0.1317,0.5659,0.8016
